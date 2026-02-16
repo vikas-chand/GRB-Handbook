@@ -55,10 +55,9 @@ coverage.xml
 
 # Jupyter Notebook
 .ipynb_checkpoints
-*.ipynb
 
-# Data and outputs
-data/
+# Data and outputs (top-level only, not grb_pipeline/data/)
+/data/
 output/
 tmp/
 *.fits

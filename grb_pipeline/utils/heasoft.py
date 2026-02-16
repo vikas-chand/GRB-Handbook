@@ -141,52 +141,37 @@ def run_xselect(
         raise HEASoftError(f"xselect error: {e}")
 
 
-def run_xspec(
-    input_script: str,
-    timeout: int = 600,
-    working_dir: Optional[str] = None,
-) -> str:
+def check_3ml_installation() -> Dict[str, bool]:
     """
-    Run XSPEC (spectral fitting).
+    Check 3ML (threeML) and related package availability.
 
-    XSPEC is the primary tool for GRB spectral analysis, supporting
-    various models (Band, Cutoff Power Law, Blackbody, etc.).
-
-    Args:
-        input_script: XSPEC command script
-        timeout: Command timeout in seconds
-        working_dir: Working directory
+    3ML is the primary spectral fitting framework for this pipeline.
+    It uses pyXSPEC as a backend when available.
 
     Returns:
-        XSPEC output and fit results
-
-    Raises:
-        HEASoftNotFoundError: If xspec not found
-        HEASoftError: If xspec fails
+        Dictionary mapping package names to availability
     """
-    xspec_path = _find_tool("xspec")
+    packages = {
+        'threeML': False,
+        'astromodels': False,
+        'pyXSPEC': False,
+    }
 
-    try:
-        result = subprocess.run(
-            [xspec_path, "-"],
-            input=input_script.encode(),
-            capture_output=True,
-            timeout=timeout,
-            cwd=working_dir,
-        )
+    for pkg in packages:
+        try:
+            __import__(pkg.lower() if pkg != 'pyXSPEC' else 'xspec')
+            packages[pkg] = True
+            logger.info(f"  {pkg} available")
+        except ImportError:
+            # threeML uses lowercase
+            try:
+                __import__(pkg)
+                packages[pkg] = True
+                logger.info(f"  {pkg} available")
+            except ImportError:
+                logger.warning(f"  {pkg} not found")
 
-        output = result.stdout.decode()
-
-        # xspec returns non-zero even on success sometimes
-        logger.info("xspec execution completed")
-        return output
-
-    except subprocess.TimeoutExpired:
-        logger.error(f"xspec timed out after {timeout} seconds")
-        raise HEASoftError(f"xspec timed out")
-    except Exception as e:
-        logger.error(f"xspec error: {e}")
-        raise HEASoftError(f"xspec error: {e}")
+    return packages
 
 
 def run_batbinevt(
@@ -341,90 +326,84 @@ def run_fkeyprint(
 
 def check_heasoft_installation() -> Dict[str, bool]:
     """
-    Check which HEASoft tools are available.
+    Check which HEASoft tools and spectral fitting packages are available.
 
     Returns:
-        Dictionary mapping tool names to availability (True/False)
+        Dictionary mapping tool/package names to availability (True/False)
     """
-    tools = ["xselect", "xspec", "batbinevt", "fselect", "fkeyprint", "ftools"]
+    # HEASoft command-line tools
+    tools = ["xselect", "batbinevt", "fselect", "fkeyprint", "ftools"]
     available = {}
 
     for tool in tools:
         try:
             _find_tool(tool)
             available[tool] = True
-            logger.info(f"✓ {tool} available")
+            logger.info(f"  {tool} available")
         except HEASoftNotFoundError:
             available[tool] = False
-            logger.warning(f"✗ {tool} not found")
+            logger.warning(f"  {tool} not found")
+
+    # 3ML and spectral fitting packages
+    available.update(check_3ml_installation())
 
     return available
 
 
-def create_xspec_script(
-    spectrum_file: str,
-    response_file: str,
-    background_file: Optional[str] = None,
-    models: List[str] = None,
-    energy_range: tuple = (0.3, 10.0),
+def create_3ml_spectral_plugins(
+    tte_files: Dict[str, str],
+    rsp_files: Dict[str, str],
+    src_interval: tuple,
+    bg_intervals: tuple = ((-50, -5), (100, 200)),
+    nai_energy: str = "8-900",
+    bgo_energy: str = "250-30000",
 ) -> str:
     """
-    Generate XSPEC command script for spectral fitting.
+    Generate 3ML (threeML) code snippet for loading GBM data as spectral plugins.
+
+    3ML's TimeSeriesBuilder handles GBM TTE/CSPEC data natively, with
+    polynomial background fitting and pyXSPEC as the spectral engine.
 
     Args:
-        spectrum_file: Input spectrum FITS file
-        response_file: Instrument response matrix
-        background_file: Background spectrum file
-        models: List of models to fit (default: ["band", "cutoffpl", "po"])
-        energy_range: Energy range to fit (keV)
+        tte_files: Dict of {detector: tte_file_path}
+        rsp_files: Dict of {detector: rsp_file_path}
+        src_interval: Source time interval (tstart, tstop) in seconds
+        bg_intervals: Background intervals ((pre_start, pre_stop), (post_start, post_stop))
+        nai_energy: NaI energy selection string for 3ML
+        bgo_energy: BGO energy selection string for 3ML
 
     Returns:
-        XSPEC script string
+        Python code string for 3ML plugin setup
     """
-    if models is None:
-        models = ["band", "cutoffpl", "po"]
+    code_lines = [
+        "from threeML import TimeSeriesBuilder",
+        "",
+        "plugins = []",
+    ]
 
-    script = f"""
-data {spectrum_file}
-ign 0.0-{energy_range[0]}
-ign {energy_range[1]}-**
-"""
+    for det, tte in tte_files.items():
+        rsp = rsp_files.get(det, '')
+        code_lines.extend([
+            f"",
+            f"# Detector {det}",
+            f"ts_{det} = TimeSeriesBuilder.from_gbm_tte(",
+            f"    '{det}',",
+            f"    tte_file='{tte}',",
+            f"    rsp_file='{rsp}',",
+            f")",
+            f"ts_{det}.set_background_interval(",
+            f"    '{bg_intervals[0][0]:.1f}-{bg_intervals[0][1]:.1f}',",
+            f"    '{bg_intervals[1][0]:.1f}-{bg_intervals[1][1]:.1f}',",
+            f")",
+            f"ts_{det}.set_active_time_interval('{src_interval[0]:.3f}-{src_interval[1]:.3f}')",
+            f"plugin_{det} = ts_{det}.to_spectrumlike()",
+        ])
 
-    if response_file:
-        script += f"response {response_file}\n"
-    if background_file:
-        script += f"back {background_file}\n"
+        if det.startswith('n'):
+            code_lines.append(f"plugin_{det}.set_active_measurements('{nai_energy}')")
+        else:
+            code_lines.append(f"plugin_{det}.set_active_measurements('{bgo_energy}')")
 
-    script += """
-method leven 10 0.01
-abund wilm
-"""
+        code_lines.append(f"plugins.append(plugin_{det})")
 
-    for model in models:
-        if model.lower() == "band":
-            script += """
-model grbcomp
-1.0, -1.0, -2.0, 100.0, 1.0
-fit
-"""
-        elif model.lower() == "cutoffpl":
-            script += """
-model cutoffpl
-1.0, -1.0, 100.0
-fit
-"""
-        elif model.lower() == "po":
-            script += """
-model pow
-1.0, -1.0
-fit
-"""
-
-    script += """
-log grb_fit.log
-show all
-save all grb_fit.xcm
-quit
-"""
-
-    return script
+    return '\n'.join(code_lines)

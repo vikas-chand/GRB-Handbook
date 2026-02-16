@@ -1,13 +1,14 @@
-"""Utility modules for GRB analysis pipeline."""
+"""
+Utility modules for GRB analysis pipeline.
 
-from .fits_utils import read_fits_lightcurve, read_fits_spectrum, read_fits_table
-from .heasoft import run_xselect, run_xspec, run_batbinevt
+Modules:
+    fits_utils: FITS file reading utilities
+    heasoft: HEASoft command wrappers
+    gbm_geometry: Fermi GBM detector geometry and angle calculation
+"""
 
 __all__ = [
-    "read_fits_lightcurve",
-    "read_fits_spectrum",
-    "read_fits_table",
-    "run_xselect",
-    "run_xspec",
-    "run_batbinevt",
+    'fits_utils',
+    'heasoft',
+    'gbm_geometry',
 ]

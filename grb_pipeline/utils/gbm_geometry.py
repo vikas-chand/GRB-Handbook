@@ -1,0 +1,351 @@
+"""
+Fermi GBM detector geometry and angle calculation.
+
+Calculates the angle between a GRB source position and each Fermi GBM detector,
+then selects the best detectors based on proximity. Based on the spacecraft
+coordinate system from Meegan et al. and angular distance code from
+Vianello's gtburst.
+
+Key functions:
+    select_gbm_detectors(ra, dec, trigdat_file) -> list: Select best NaI + BGO detectors
+    get_angular_distance(ra1, dec1, ra2, dec2) -> float: Vincenty formula on sphere
+
+Usage:
+    from grb_pipeline.utils.gbm_geometry import select_gbm_detectors
+    detectors = select_gbm_detectors(ra=123.45, dec=-45.67, trigdat_file='trigdat.fits')
+    # Returns sorted list of (detector_name, angle_degrees)
+"""
+
+import math
+import logging
+from typing import List, Tuple, Optional, Dict, Any
+
+logger = logging.getLogger(__name__)
+
+
+# ------------------------------------------------------------------
+# GBM Detector directions in spacecraft coordinates (Meegan et al.)
+# Format: {detector_name: (azimuth_deg, zenith_deg)}
+# ------------------------------------------------------------------
+DETECTOR_DIRECTIONS = {
+    'n0':  (45.89,  20.58),
+    'n1':  (45.11,  45.31),
+    'n2':  (58.44,  90.21),
+    'n3':  (314.87, 45.24),
+    'n4':  (303.15, 90.27),
+    'n5':  (3.35,   89.79),
+    'n6':  (224.93, 20.43),
+    'n7':  (224.62, 46.18),
+    'n8':  (236.61, 89.97),
+    'n9':  (135.19, 45.55),
+    'na':  (123.73, 90.42),
+    'nb':  (183.74, 90.32),
+    'b0':  (0.0,    90.0),   # BGO 0 — +X face
+    'b1':  (180.0,  90.0),   # BGO 1 — -X face
+}
+
+
+class Vector:
+    """3D vector for spacecraft coordinate transformations."""
+
+    def __init__(self, x: float, y: float, z: float):
+        self.x = x
+        self.y = y
+        self.z = z
+
+    @classmethod
+    def from_spherical(cls, azimuth_deg: float, zenith_deg: float) -> 'Vector':
+        """
+        Create vector from spherical coordinates.
+
+        Parameters
+        ----------
+        azimuth_deg : float
+            Azimuth angle in degrees (0-360)
+        zenith_deg : float
+            Zenith angle in degrees (0 = along +Z axis, 90 = in XY plane)
+        """
+        az = math.radians(azimuth_deg)
+        zen = math.radians(zenith_deg)
+        return cls(
+            x=math.sin(zen) * math.cos(az),
+            y=math.sin(zen) * math.sin(az),
+            z=math.cos(zen),
+        )
+
+    @classmethod
+    def from_ra_dec(cls, ra_deg: float, dec_deg: float) -> 'Vector':
+        """Create unit vector from RA/Dec in degrees."""
+        ra = math.radians(ra_deg)
+        dec = math.radians(dec_deg)
+        return cls(
+            x=math.cos(dec) * math.cos(ra),
+            y=math.cos(dec) * math.sin(ra),
+            z=math.sin(dec),
+        )
+
+    def dot(self, other: 'Vector') -> float:
+        return self.x * other.x + self.y * other.y + self.z * other.z
+
+    def norm(self) -> float:
+        return math.sqrt(self.x**2 + self.y**2 + self.z**2)
+
+    def angle_to(self, other: 'Vector') -> float:
+        """Angle between two vectors in degrees."""
+        cos_angle = self.dot(other) / (self.norm() * other.norm())
+        # Clamp to [-1, 1] for numerical safety
+        cos_angle = max(-1.0, min(1.0, cos_angle))
+        return math.degrees(math.acos(cos_angle))
+
+
+def get_angular_distance(ra1: float, dec1: float, ra2: float, dec2: float) -> float:
+    """
+    Calculate angular distance between two sky positions using the Vincenty formula.
+
+    More numerically stable than the simple arccos formula for small and large angles.
+
+    Parameters
+    ----------
+    ra1, dec1 : float
+        First position in degrees
+    ra2, dec2 : float
+        Second position in degrees
+
+    Returns
+    -------
+    float
+        Angular distance in degrees
+    """
+    ra1_r = math.radians(ra1)
+    dec1_r = math.radians(dec1)
+    ra2_r = math.radians(ra2)
+    dec2_r = math.radians(dec2)
+
+    delta_ra = ra2_r - ra1_r
+
+    # Vincenty formula
+    numerator = math.sqrt(
+        (math.cos(dec2_r) * math.sin(delta_ra)) ** 2 +
+        (math.cos(dec1_r) * math.sin(dec2_r) -
+         math.sin(dec1_r) * math.cos(dec2_r) * math.cos(delta_ra)) ** 2
+    )
+    denominator = (
+        math.sin(dec1_r) * math.sin(dec2_r) +
+        math.cos(dec1_r) * math.cos(dec2_r) * math.cos(delta_ra)
+    )
+
+    return math.degrees(math.atan2(numerator, denominator))
+
+
+def get_detector_angles_from_trigdat(
+    ra: float,
+    dec: float,
+    trigdat_file: str,
+) -> List[Tuple[str, float]]:
+    """
+    Calculate angle from source to each GBM detector using trigdat spacecraft attitude.
+
+    The trigdat file contains the spacecraft quaternion at trigger time,
+    which defines the transformation from J2000 to spacecraft coordinates.
+
+    Parameters
+    ----------
+    ra : float
+        Source RA in degrees (J2000)
+    dec : float
+        Source Dec in degrees (J2000)
+    trigdat_file : str
+        Path to trigdat FITS file
+
+    Returns
+    -------
+    list of (detector_name, angle_deg)
+        All 14 detectors with their angles to the source, sorted by angle.
+    """
+    try:
+        from astropy.io import fits
+        from astropy.coordinates import SkyCoord
+        import numpy as np
+    except ImportError:
+        logger.error("astropy is required for trigdat processing")
+        raise
+
+    # Read spacecraft quaternion from trigdat
+    with fits.open(trigdat_file) as hdul:
+        # The quaternion is in the TRIGRATE extension
+        trigrate = hdul['TRIGRATE'].data
+        quat = trigrate['SCATTITD'][0]  # Quaternion [q1, q2, q3, q4]
+
+    # Convert source position to spacecraft frame using quaternion rotation
+    source_j2000 = Vector.from_ra_dec(ra, dec)
+
+    # Quaternion rotation: v' = q * v * q^(-1)
+    # Following the convention in the Fermi GBM data
+    q1, q2, q3, q4 = quat
+
+    # Rotation matrix from quaternion
+    r11 = q1**2 - q2**2 - q3**2 + q4**2
+    r12 = 2 * (q1 * q2 + q3 * q4)
+    r13 = 2 * (q1 * q3 - q2 * q4)
+    r21 = 2 * (q1 * q2 - q3 * q4)
+    r22 = -q1**2 + q2**2 - q3**2 + q4**2
+    r23 = 2 * (q2 * q3 + q1 * q4)
+    r31 = 2 * (q1 * q3 + q2 * q4)
+    r32 = 2 * (q2 * q3 - q1 * q4)
+    r33 = -q1**2 - q2**2 + q3**2 + q4**2
+
+    # Transform source to spacecraft frame
+    sc_x = r11 * source_j2000.x + r12 * source_j2000.y + r13 * source_j2000.z
+    sc_y = r21 * source_j2000.x + r22 * source_j2000.y + r23 * source_j2000.z
+    sc_z = r31 * source_j2000.x + r32 * source_j2000.y + r33 * source_j2000.z
+
+    source_sc = Vector(sc_x, sc_y, sc_z)
+
+    # Calculate angle to each detector
+    angles = []
+    for det_name, (az, zen) in DETECTOR_DIRECTIONS.items():
+        det_vector = Vector.from_spherical(az, zen)
+        angle = source_sc.angle_to(det_vector)
+        angles.append((det_name, angle))
+
+    # Sort by angle (closest first)
+    angles.sort(key=lambda x: x[1])
+
+    return angles
+
+
+def get_detector_angles_approximate(
+    ra: float,
+    dec: float,
+    sc_ra: float,
+    sc_dec: float,
+) -> List[Tuple[str, float]]:
+    """
+    Approximate detector angles using spacecraft pointing direction.
+
+    This is a simplified calculation when the full quaternion is not available.
+    It uses only the spacecraft Z-axis pointing (RA, Dec) and assumes the
+    spacecraft X-axis points roughly to the sun.
+
+    Parameters
+    ----------
+    ra : float
+        Source RA in degrees
+    dec : float
+        Source Dec in degrees
+    sc_ra : float
+        Spacecraft Z-axis RA in degrees
+    sc_dec : float
+        Spacecraft Z-axis Dec in degrees
+
+    Returns
+    -------
+    list of (detector_name, angle_deg)
+        Sorted by angle (approximate).
+    """
+    # The angle from spacecraft Z-axis to the source
+    z_angle = get_angular_distance(ra, dec, sc_ra, sc_dec)
+
+    # For approximate calculation, we can estimate that:
+    # - Detectors near the Z-axis (small zenith) see sources near sc pointing
+    # - Detectors in the XY plane (zenith~90) see sources ~90 deg from sc pointing
+    # This is very rough but useful for quick checks
+
+    angles = []
+    for det_name, (az, zen) in DETECTOR_DIRECTIONS.items():
+        # Very approximate: angle ~ |z_angle - zen|
+        # This ignores azimuthal dependence but gives a rough ordering
+        approx_angle = abs(z_angle - zen)
+        angles.append((det_name, approx_angle))
+
+    angles.sort(key=lambda x: x[1])
+    return angles
+
+
+def select_gbm_detectors(
+    ra: float,
+    dec: float,
+    trigdat_file: Optional[str] = None,
+    sc_ra: Optional[float] = None,
+    sc_dec: Optional[float] = None,
+    max_angle: float = 60.0,
+    n_nai: int = 3,
+    n_bgo: int = 1,
+) -> Dict[str, Any]:
+    """
+    Select the best GBM detectors for analysis.
+
+    Uses trigdat quaternion if available, otherwise falls back to
+    approximate calculation from spacecraft pointing.
+
+    Parameters
+    ----------
+    ra : float
+        Source RA in degrees
+    dec : float
+        Source Dec in degrees
+    trigdat_file : str, optional
+        Path to trigdat FITS file (for precise calculation)
+    sc_ra : float, optional
+        Spacecraft Z-axis RA (for approximate calculation)
+    sc_dec : float, optional
+        Spacecraft Z-axis Dec (for approximate calculation)
+    max_angle : float
+        Maximum acceptable angle in degrees (default: 60)
+    n_nai : int
+        Number of NaI detectors to select (default: 3)
+    n_bgo : int
+        Number of BGO detectors to select (default: 1)
+
+    Returns
+    -------
+    dict
+        {
+            'nai_detectors': [(name, angle), ...],
+            'bgo_detectors': [(name, angle), ...],
+            'all_angles': [(name, angle), ...],
+            'method': 'trigdat' or 'approximate',
+        }
+    """
+    if trigdat_file:
+        try:
+            all_angles = get_detector_angles_from_trigdat(ra, dec, trigdat_file)
+            method = 'trigdat'
+        except Exception as e:
+            logger.warning(f"trigdat calculation failed: {e}, using approximate method")
+            if sc_ra is not None and sc_dec is not None:
+                all_angles = get_detector_angles_approximate(ra, dec, sc_ra, sc_dec)
+                method = 'approximate'
+            else:
+                logger.error("No spacecraft pointing info available")
+                return {'nai_detectors': [], 'bgo_detectors': [], 'all_angles': [], 'method': 'failed'}
+    elif sc_ra is not None and sc_dec is not None:
+        all_angles = get_detector_angles_approximate(ra, dec, sc_ra, sc_dec)
+        method = 'approximate'
+    else:
+        logger.error("Provide either trigdat_file or (sc_ra, sc_dec)")
+        return {'nai_detectors': [], 'bgo_detectors': [], 'all_angles': [], 'method': 'failed'}
+
+    # Split NaI and BGO
+    nai_angles = [(name, angle) for name, angle in all_angles if name.startswith('n')]
+    bgo_angles = [(name, angle) for name, angle in all_angles if name.startswith('b')]
+
+    # Select best within max_angle
+    selected_nai = [(n, a) for n, a in nai_angles if a <= max_angle][:n_nai]
+    selected_bgo = [(n, a) for n, a in bgo_angles if a <= max_angle][:n_bgo]
+
+    # If not enough within max_angle, take the closest anyway
+    if len(selected_nai) < n_nai:
+        selected_nai = nai_angles[:n_nai]
+    if len(selected_bgo) < n_bgo:
+        selected_bgo = bgo_angles[:n_bgo]
+
+    logger.info(f"Selected NaI: {[n for n, a in selected_nai]}, "
+                f"BGO: {[n for n, a in selected_bgo]} (method: {method})")
+
+    return {
+        'nai_detectors': selected_nai,
+        'bgo_detectors': selected_bgo,
+        'all_angles': all_angles,
+        'method': method,
+    }
