@@ -1,0 +1,114 @@
+[build-system]
+requires = ["setuptools>=65.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "grb-pipeline"
+version = "0.1.0"
+description = "Comprehensive Gamma-Ray Burst Analysis Framework with Claude AI Integration"
+readme = "README.md"
+requires-python = ">=3.9"
+authors = [
+    {name = "Vikas", email = "vikas@example.com"}
+]
+license = {text = "MIT"}
+keywords = ["gamma-ray", "burst", "GRB", "astronomy", "spectroscopy", "X-ray"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "Topic :: Scientific/Engineering :: Astronomy",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+]
+
+dependencies = [
+    "numpy>=1.24.0",
+    "scipy>=1.10.0",
+    "pandas>=2.0.0",
+    "astropy>=6.0.0",
+    "astroquery>=0.4.7",
+    "requests>=2.31.0",
+    "matplotlib>=3.7.0",
+    "plotly>=5.14.0",
+    "seaborn>=0.12.0",
+    "pyyaml>=6.0",
+    "beautifulsoup4>=4.12.0",
+    "anthropic>=0.15.0",
+    "iminuit>=2.20.0",
+    "emcee>=3.1.4",
+    "corner>=2.2.1",
+    "jupyter>=1.0.0",
+    "ipython>=8.10.0",
+    "nbformat>=5.8.0",
+    "tqdm>=4.65.0",
+    "python-dotenv>=1.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0",
+    "black>=23.0.0",
+    "flake8>=6.0.0",
+    "mypy>=1.0.0",
+    "pytest-cov>=4.0.0",
+]
+
+[project.scripts]
+grb-pipeline = "grb_pipeline.pipeline.runner:main"
+
+[project.urls]
+Homepage = "https://github.com/yourusername/grb-pipeline"
+Documentation = "https://github.com/yourusername/grb-pipeline/wiki"
+Repository = "https://github.com/yourusername/grb-pipeline.git"
+Issues = "https://github.com/yourusername/grb-pipeline/issues"
+
+[tool.setuptools]
+packages = ["grb_pipeline", "grb_pipeline.core", "grb_pipeline.utils"]
+
+[tool.black]
+line-length = 100
+target-version = ['py39', 'py310', 'py311']
+include = '\.pyi?$'
+extend-exclude = '''
+/(
+  # directories
+  \.eggs
+  | \.git
+  | \.hg
+  | \.mypy_cache
+  | \.tox
+  | \.venv
+  | build
+  | dist
+)/
+'''
+
+[tool.isort]
+profile = "black"
+line_length = 100
+
+[tool.mypy]
+python_version = "3.9"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = false
+
+[[tool.mypy.overrides]]
+module = [
+    "astropy.*",
+    "astroquery.*",
+    "emcee",
+    "corner",
+    "iminuit",
+]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+minversion = "7.0"
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+addopts = "-v --strict-markers"

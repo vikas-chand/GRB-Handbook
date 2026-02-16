@@ -1,0 +1,116 @@
+# GRB Analysis Pipeline Configuration
+# Default configuration with recommended settings
+
+pipeline:
+  name: "GRB Analysis Pipeline"
+  version: "0.1.0"
+  log_level: "INFO"
+  # Valid log levels: DEBUG, INFO, WARNING, ERROR, CRITICAL
+
+paths:
+  # Data storage directories
+  data_dir: "./data"
+  cache_dir: "./data/cache"
+  output_dir: "./output"
+  database: "./data/grb_database.db"
+  # Raw observation data
+  raw_data_dir: "./data/raw"
+  # Processed light curves and spectra
+  lightcurve_dir: "./data/lightcurves"
+  spectral_dir: "./data/spectra"
+
+archives:
+  # Mission archive URLs
+  swift_base_url: "https://www.swift.ac.uk/xrt_curves"
+  swift_bat_url: "https://swift.gsfc.nasa.gov/results/batgrbcat"
+  fermi_gbm_url: "https://heasarc.gsfc.nasa.gov/FTP/fermi/data/gbm"
+  fermi_lat_url: "https://fermi.gsfc.nasa.gov/ssc/data/access"
+  gcn_base_url: "https://gcn.gsfc.nasa.gov/gcn3"
+  heasarc_url: "https://heasarc.gsfc.nasa.gov"
+  # Additional archives
+  integral_url: "https://www.isdc.unige.ch"
+  maxi_url: "http://maxi.riken.jp"
+  hxmt_url: "http://www.ihep.ac.cn/hxmt"
+
+cosmology:
+  # Planck 2018 parameters
+  H0: 67.4  # km/s/Mpc
+  Omega_m: 0.315  # Matter density
+  Omega_Lambda: 0.685  # Dark energy density
+  # Omega_k implicitly 1 - Omega_m - Omega_Lambda
+
+analysis:
+  # Energy range for default analysis (keV)
+  default_energy_range: [0.3, 10000]
+  # Preferred spectral models in order of preference
+  spectral_models: ["Band", "CPL", "PL"]
+  # Confidence level for T90 duration
+  t90_confidence: 0.9
+  # Minimum number of points for afterglow fitting
+  afterglow_min_points: 5
+  # T90 threshold for GRB classification (seconds)
+  classification_t90_threshold: 2.0
+  # Minimum reduced chi-squared for acceptable fit
+  min_chi_sq: 0.5
+  # Maximum reduced chi-squared for good fit
+  max_chi_sq: 2.0
+  # Minimum signal-to-noise ratio for detection
+  min_snr: 3.0
+
+ai:
+  # Anthropic API configuration
+  model: "claude-sonnet-4-20250514"
+  max_tokens: 4096
+  temperature: 0.3  # Lower temperature for more deterministic results
+  timeout_seconds: 60
+  # Enable AI interpretation of GCN circulars
+  enable_gcn_analysis: true
+  # Enable AI-powered multi-wavelength correlation
+  enable_correlation_analysis: true
+
+visualization:
+  # Figure quality and output
+  figure_dpi: 150  # 300 for publication quality
+  default_figsize: [10, 7]
+  # Color palette: viridis, magma, plasma, twilight, seaborn, etc.
+  color_palette: "viridis"
+  save_format: "png"  # png or pdf
+  # Show plots interactively
+  show_plots: false
+  # Include error bars
+  show_errors: true
+  # Include best-fit curves
+  show_fits: true
+
+data_processing:
+  # FITS file reading
+  fits_chunk_size: 10000  # Number of rows to read at a time
+  # Time binning for light curves
+  min_bin_size: 0.01  # seconds
+  max_bin_size: 3600.0  # seconds (1 hour)
+  # Spectral binning
+  spectral_min_counts: 20  # Minimum counts per bin
+  spectral_group_method: "optimal"  # optimal, lin, log
+  # Background subtraction
+  background_subtract: true
+  background_method: "linear"  # linear, polynomial, spline
+
+heasoft:
+  # HEASoft command-line tool paths
+  # Leave empty to search system PATH
+  xselect_path: ""
+  xspec_path: ""
+  fselect_path: ""
+  fkeyprint_path: ""
+  # Timeouts for external processes
+  command_timeout: 300  # seconds
+  # Working directory for temporary files
+  working_dir: "./tmp"
+
+# Feature flags for optional components
+features:
+  enable_heasoft_integration: true
+  enable_remote_data_download: true
+  enable_database_backups: true
+  enable_multi_wavelength_correlation: true
+  enable_machine_learning_classification: false  # Requires additional dependencies

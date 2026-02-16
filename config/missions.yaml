@@ -1,0 +1,263 @@
+# Mission-Specific Configuration
+# Detailed parameters for each GRB observation mission
+
+missions:
+  # =========================================================================
+  # Swift (NASA/UK/Italy/Canada)
+  # =========================================================================
+  Swift:
+    location: "Earth orbit, 600 km altitude"
+    operational: true
+    launch_date: "2004-11-20"
+
+    instruments:
+      BAT:
+        full_name: "Burst Alert Telescope"
+        detector_type: "Coded mask"
+        energy_min_keV: 15.0
+        energy_max_keV: 150.0
+        field_of_view_deg: 100.0
+        localization_arcmin: 3.0
+        time_resolution_sec: 0.064
+        trigger_mode: "Automatic on >=6 sigma detection"
+        key_products:
+          - bat_mask_weighted_lc.fits
+          - bat_pha.fits  # Spectrum
+          - bat_lc.fits  # Light curve
+
+      XRT:
+        full_name: "X-Ray Telescope"
+        detector_type: "CCD (Wolter grazing incidence)"
+        energy_min_keV: 0.3
+        energy_max_keV: 10.0
+        field_of_view_arcmin: 24.0
+        resolution_arcsec: 5.4
+        time_resolution_sec: 0.002
+        pointing_accuracy_arcsec: 2.5
+        modes:
+          - Imaging
+          - Spectroscopy
+        key_products:
+          - pc_lc.fits
+          - pc_spc.fits
+          - wt_lc.fits
+
+      UVOT:
+        full_name: "UV/Optical Telescope"
+        detector_type: "CCD"
+        field_of_view_arcmin: 17.0
+        resolution_arcsec: 2.5
+        modes:
+          - Imaging
+          - Spectroscopy
+        filters:
+          - name: "V"
+            wavelength_angstrom: 5560
+            fwhm_angstrom: 1050
+          - name: "B"
+            wavelength_angstrom: 4380
+            fwhm_angstrom: 900
+          - name: "U"
+            wavelength_angstrom: 3460
+            fwhm_angstrom: 600
+          - name: "UVW1"
+            wavelength_angstrom: 2600
+            fwhm_angstrom: 690
+          - name: "UVM2"
+            wavelength_angstrom: 2246
+            fwhm_angstrom: 498
+          - name: "UVW2"
+            wavelength_angstrom: 1928
+            fwhm_angstrom: 657
+          - name: "WHITE"
+            wavelength_angstrom: 7000
+            fwhm_angstrom: 4000
+
+    slew_time_sec: 60
+    data_archive_url: "https://www.swift.ac.uk"
+    archive_structure: "grb/swift_GRBYYMMDD[a-z]/swift_GRBYYMMDD[a-z]_[0-9]{1,4}s.fits"
+
+  # =========================================================================
+  # Fermi (NASA, JAXA, SLAC)
+  # =========================================================================
+  Fermi:
+    location: "Earth orbit, 565 km altitude"
+    operational: true
+    launch_date: "2008-06-11"
+
+    instruments:
+      GBM:
+        full_name: "Gamma-ray Burst Monitor"
+        detector_type: "12 NaI(Tl) + 2 BGO scintillators"
+        energy_min_keV: 0.008  # 8 keV
+        energy_max_keV: 40000.0  # 40 MeV
+        all_sky_coverage: true
+        time_resolution_sec: 0.096  # Best resolution
+        localization_arcmin: 1000.0  # Typical, energy-dependent
+        detectors: ["n0", "n1", "n2", "n3", "n4", "n5", "n6", "n7", "n8", "n9", "b0", "b1"]
+        key_products:
+          - gbu_detector_lc.fits  # Light curve
+          - gbu_spectrum.fits  # Spectrum
+          - gbu_tstart.fits  # Trigger time
+
+      LAT:
+        full_name: "Large Area Telescope"
+        detector_type: "Pair conversion telescope"
+        energy_min_MeV: 20.0
+        energy_max_MeV: 300000.0  # 300 GeV
+        field_of_view_deg: 2.4  # steradian
+        resolution_deg: 0.1  # Energy dependent
+        on_axis_resolution_arcmin: 15.0  # At 100 MeV
+        time_resolution_sec: 0.001
+        point_spread_function_energy_dependent: true
+        key_products:
+          - GRB_lc.fits
+          - GRB_spectrum.fits
+
+    data_archive_url: "https://fermi.gsfc.nasa.gov"
+    gbm_archive: "https://heasarc.gsfc.nasa.gov/FTP/fermi/data/gbm"
+
+  # =========================================================================
+  # INTEGRAL (ESA, Russia, USA)
+  # =========================================================================
+  INTEGRAL:
+    location: "High elliptical orbit"
+    operational: true
+    launch_date: "2002-10-17"
+
+    instruments:
+      IBIS:
+        full_name: "Imager on Board the INTEGRAL Satellite"
+        detector_type: "Coded mask + CdZnTe array"
+        energy_min_keV: 15.0
+        energy_max_keV: 10000.0
+        field_of_view_deg: 29.0
+        localization_arcmin: 2.0
+        time_resolution_sec: 0.1
+        key_products:
+          - ibis_lc.fits
+          - ibis_spc.fits
+
+      SPI:
+        full_name: "Spectrometer on INTEGRAL"
+        detector_type: "19 Ge detectors in coded mask"
+        energy_min_keV: 20.0
+        energy_max_keV: 8000.0
+        energy_resolution_percent: 1.0
+        time_resolution_sec: 0.1
+
+      JEM_X:
+        full_name: "Joint European X-ray Monitor"
+        detector_type: "X-ray imaging concentrator"
+        energy_min_keV: 3.0
+        energy_max_keV: 35.0
+        field_of_view_arcmin: 15.0
+        resolution_arcsec: 3.0
+
+    data_archive_url: "https://www.isdc.unige.ch"
+    observation_cadence_days: 3
+
+  # =========================================================================
+  # MAXI (JAXA)
+  # =========================================================================
+  MAXI:
+    location: "Attached to ISS"
+    operational: true
+    launch_date: "2009-03-15"
+    full_name: "Monitor of All-sky X-ray Image"
+
+    instruments:
+      MAXI:
+        detector_type: "Gas slit camera + solid state slit camera"
+        energy_min_keV: 0.7
+        energy_max_keV: 30.0
+        field_of_view_deg: 1.5  # Slit camera
+        time_resolution_sec: 1.0
+        all_sky_coverage: true
+        scan_period_min: 92  # Orbital period
+
+    data_archive_url: "http://maxi.riken.jp"
+    latency_hours: 0.25
+
+  # =========================================================================
+  # HXMT (CNSA)
+  # =========================================================================
+  HXMT:
+    location: "Earth orbit, 550 km altitude"
+    operational: true
+    launch_date: "2015-06-15"
+    full_name: "Hard X-ray Modulation Telescope"
+
+    instruments:
+      LE:
+        full_name: "Low Energy detector"
+        detector_type: "Silicon strip detector"
+        energy_min_keV: 1.0
+        energy_max_keV: 8.0
+        field_of_view_arcmin: 34.0
+        time_resolution_sec: 0.01
+
+      ME:
+        full_name: "Medium Energy detector"
+        detector_type: "Gas scintillation proportional counter"
+        energy_min_keV: 5.0
+        energy_max_keV: 30.0
+        field_of_view_arcmin: 34.0
+        time_resolution_sec: 0.01
+
+      HE:
+        full_name: "High Energy detector"
+        detector_type: "NaI(Tl)/CsI(Na) scintillator"
+        energy_min_keV: 20.0
+        energy_max_keV: 250.0
+        field_of_view_deg: 5.7
+        time_resolution_sec: 0.01
+
+    data_archive_url: "http://www.ihep.ac.cn/hxmt"
+
+  # =========================================================================
+  # AGILE (ASI, INAF, IKI)
+  # =========================================================================
+  AGILE:
+    location: "Earth orbit"
+    operational: true
+    launch_date: "2007-04-23"
+    full_name: "Astrorivelatore Gamma a Immagini Leggero"
+
+    instruments:
+      IMAGER:
+        full_name: "Gamma-Ray Imager"
+        detector_type: "CdZnTe imaging array"
+        energy_min_MeV: 30.0
+        energy_max_MeV: 30000.0
+        field_of_view_deg: 12.0
+        localization_arcmin: 1.0  # Best case
+
+      MCAL:
+        full_name: "Mini Calorimeter"
+        detector_type: "CsI(Tl) calorimeter"
+        energy_min_keV: 350.0
+        energy_max_keV: 100000.0
+
+    data_archive_url: "https://agile.asdc.asi.it"
+
+  # =========================================================================
+  # UVOT-only instruments (for optical/UV follow-up)
+  # =========================================================================
+  Optical_Telescopes:
+    instruments:
+      SDSS:
+        location: "Apache Point Observatory"
+        aperture_m: 2.5
+        optical_filter: true
+
+      Pan_STARRS:
+        location: "Maui"
+        aperture_m: 1.8
+        discovery_system: true
+
+      ZTF:
+        location: "Palomar Observatory"
+        aperture_m: 1.2
+        survey_mode: true
+        transient_discovery: true

@@ -1,0 +1,153 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+pip-wheel-metadata/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual environments
+venv/
+ENV/
+env/
+.venv
+env.bak/
+venv.bak/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+*.sublime-project
+*.sublime-workspace
+
+# Testing
+.tox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.py,cover
+.hypothesis/
+.pytest_cache/
+
+# Jupyter Notebook
+.ipynb_checkpoints
+*.ipynb
+
+# Data and outputs
+data/
+output/
+tmp/
+*.fits
+*.fits.gz
+*.hdf5
+*.h5
+*.dat
+*.log
+*.csv
+
+# Database
+*.db
+*.sqlite
+*.sqlite3
+
+# Cache
+.cache/
+cache/
+*.pkl
+*.pickle
+
+# Local configuration overrides
+config/local.yaml
+.env
+.env.local
+
+# Generated reports
+reports/
+*.pdf
+*.html
+site/
+
+# OS specific
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Editor specific
+*.swp
+*.swo
+*.iml
+.vscode/
+
+# Temporary files
+*.tmp
+*.bak
+*.backup
+*.orig
+
+# Large binary files
+*.tar
+*.tar.gz
+*.zip
+*.rar
+
+# Scientific data formats
+*.asdf
+*.nc
+*.hdf
+*.h5
+
+# Vim
+.vim/
+*.vim
+
+# Emacs
+*~
+\#*\#
+.\#*
+
+# Git
+.git/
+.gitmodules
+
+# Build artifacts
+*.o
+*.a
+*.so
+*.dylib
+
+# Documentation
+docs/_build/
+site/
+
+# MyPy
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# Pytest
+.pytest_cache/
+.pytype/
