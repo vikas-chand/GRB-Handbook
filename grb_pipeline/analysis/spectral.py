@@ -967,3 +967,232 @@ class SpectralAnalyzer:
         luminosity_distance = comoving_distance * (1 + redshift)
 
         return luminosity_distance
+
+    # ------------------------------------------------------------------
+    # Flux density conversion (from SwiftXRT_Fd_atEkeV.ipynb)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def flux_density_convert(
+        E0: float,
+        E: float,
+        photon_index: float,
+    ) -> float:
+        """
+        Convert flux density from one energy to another using a power-law spectrum.
+
+        Given flux density at energy E0, returns the conversion factor to get
+        flux density at energy E, assuming a power-law spectrum with the given
+        photon index:  F_nu ~ E^{-(Gamma-1)}
+
+        From Vikas Chand's SwiftXRT_Fd_atEkeV notebook.
+
+        Parameters
+        ----------
+        E0 : float
+            Reference energy in keV (where flux density is known)
+        E : float
+            Target energy in keV (where flux density is wanted)
+        photon_index : float
+            Photon index Gamma (N(E) ~ E^{-Gamma})
+
+        Returns
+        -------
+        float
+            Conversion factor: multiply flux_density@E0 by this to get flux_density@E
+
+        Examples
+        --------
+        >>> SpectralAnalyzer.flux_density_convert(10, 1, 2.0)
+        10.0
+        >>> # Flux density at 1 keV = 10 * flux density at 10 keV for Gamma=2
+        """
+        beta = photon_index - 1  # energy spectral index
+        # Convert @E0 to @1 keV, then @1 keV to @E
+        factor_to_1keV = E0 ** beta
+        factor_from_1keV = E ** (-beta)
+        return factor_to_1keV * factor_from_1keV
+
+    @staticmethod
+    def flux_density_at_energy(
+        flux_density: float,
+        E0: float,
+        E: float,
+        photon_index: float,
+    ) -> float:
+        """
+        Get flux density at energy E given flux density at energy E0.
+
+        Parameters
+        ----------
+        flux_density : float
+            Known flux density at E0 (in any units, e.g. Jy or mJy)
+        E0 : float
+            Energy where flux density is known (keV)
+        E : float
+            Energy where flux density is wanted (keV)
+        photon_index : float
+            Photon index
+
+        Returns
+        -------
+        float
+            Flux density at energy E (same units as input)
+        """
+        factor = SpectralAnalyzer.flux_density_convert(E0, E, photon_index)
+        return flux_density * factor
+
+
+@dataclass
+class XRTFluxDensityData:
+    """Container for Swift XRT flux density data with photon indices.
+
+    Holds time-resolved flux density measurements and photon indices
+    from Swift XRT spectral analysis, typically from the UK Swift Science
+    Data Centre automated pipeline.
+    """
+    time: np.ndarray              # Mid-times since trigger (s)
+    time_err_pos: np.ndarray      # Positive time errors
+    time_err_neg: np.ndarray      # Negative time errors
+    flux_density: np.ndarray      # Flux density (Jy or mJy)
+    flux_density_err_pos: np.ndarray
+    flux_density_err_neg: np.ndarray
+    photon_index: np.ndarray      # Time-resolved photon index
+    photon_index_err_pos: np.ndarray
+    photon_index_err_neg: np.ndarray
+    reference_energy: float = 10.0  # Energy at which flux density is measured (keV)
+
+
+class XRTFluxDensity:
+    """
+    Swift XRT flux density analysis.
+
+    Reads XRT flux density and photon index files (as produced by the
+    UK Swift Science Data Centre), and converts flux density to any
+    desired energy using the time-resolved photon index.
+
+    From Vikas Chand's SwiftXRT_Fd_atEkeV notebook.
+
+    Usage
+    -----
+    >>> xrt = XRTFluxDensity()
+    >>> data = xrt.read_data('GRB201015A_Fluxdensity10.txt', 'GRB201015A_phindex.txt')
+    >>> fd_1keV = xrt.convert_to_energy(data, target_energy=1.0)
+    """
+
+    @staticmethod
+    def read_data(
+        flux_density_file: str,
+        photon_index_file: str,
+        reference_energy: float = 10.0,
+    ) -> XRTFluxDensityData:
+        """
+        Read XRT flux density and photon index data files.
+
+        Expected file format (whitespace-separated, no header):
+            col1: time
+            col2: time_err_pos
+            col3: time_err_neg
+            col4: value
+            col5: value_err_pos
+            col6: value_err_neg
+
+        Parameters
+        ----------
+        flux_density_file : str
+            Path to flux density data file
+        photon_index_file : str
+            Path to photon index data file
+        reference_energy : float
+            Energy (keV) at which flux density is measured (default: 10)
+
+        Returns
+        -------
+        XRTFluxDensityData
+            Combined flux density and photon index data
+        """
+        # Read flux density
+        fd = np.loadtxt(flux_density_file)
+        sort_fd = np.argsort(fd[:, 0])
+        fd = fd[sort_fd]
+
+        # Read photon index
+        ph = np.loadtxt(photon_index_file)
+        sort_ph = np.argsort(ph[:, 0])
+        ph = ph[sort_ph]
+
+        return XRTFluxDensityData(
+            time=fd[:, 0],
+            time_err_pos=fd[:, 1],
+            time_err_neg=fd[:, 2],
+            flux_density=fd[:, 3],
+            flux_density_err_pos=fd[:, 4],
+            flux_density_err_neg=fd[:, 5],
+            photon_index=ph[:, 3],
+            photon_index_err_pos=ph[:, 4],
+            photon_index_err_neg=ph[:, 5],
+            reference_energy=reference_energy,
+        )
+
+    @staticmethod
+    def convert_to_energy(
+        data: XRTFluxDensityData,
+        target_energy: float,
+    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """
+        Convert flux density from reference energy to target energy.
+
+        Uses time-resolved photon indices for proper conversion at each epoch.
+
+        Parameters
+        ----------
+        data : XRTFluxDensityData
+            Input data with flux density and photon indices
+        target_energy : float
+            Target energy in keV
+
+        Returns
+        -------
+        tuple of (flux_density, flux_density_err_pos, flux_density_err_neg)
+            Converted flux density and errors at target energy
+        """
+        factor = np.array([
+            SpectralAnalyzer.flux_density_convert(
+                data.reference_energy, target_energy, gamma
+            )
+            for gamma in data.photon_index
+        ])
+
+        fd_converted = data.flux_density * factor
+        fd_err_pos = data.flux_density_err_pos * factor
+        fd_err_neg = data.flux_density_err_neg * factor
+
+        return fd_converted, fd_err_pos, fd_err_neg
+
+    @staticmethod
+    def save_converted(
+        data: XRTFluxDensityData,
+        target_energy: float,
+        output_file: str,
+    ) -> None:
+        """
+        Convert flux density and save to a new file.
+
+        Parameters
+        ----------
+        data : XRTFluxDensityData
+            Input data
+        target_energy : float
+            Target energy in keV
+        output_file : str
+            Output file path
+        """
+        fd, fd_ep, fd_en = XRTFluxDensity.convert_to_energy(data, target_energy)
+
+        output = np.column_stack([
+            data.time, data.time_err_neg, data.time_err_pos,
+            fd, fd_en, fd_ep,
+        ])
+
+        header = f"time terr_n terr_p Fd@{target_energy}keV Fd_n Fd_p"
+        np.savetxt(output_file, output, header=header)

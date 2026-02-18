@@ -1,15 +1,68 @@
-"""Temporal analysis module for GRB light curves."""
+"""Temporal analysis module for GRB light curves.
+
+Includes standard timing analysis (T90, T50, variability, autocorrelation,
+pulse fitting) and the Band (1997) Discrete Cross-Correlation Function (DCCF)
+for spectral lag measurement with Monte Carlo error estimation.
+
+References
+----------
+Band, D. L. 1997, ApJ, 486, 928
+    "Postpeak Decline of Gamma-Ray Burst Spectra"
+    Defines the discrete cross-correlation function for transient sources.
+"""
 
 from typing import Tuple, Optional, Dict, List
+from dataclasses import dataclass, field
 import numpy as np
 from scipy import signal, optimize, stats
 from scipy.interpolate import interp1d
+from scipy.optimize import curve_fit
+import warnings
 
 from .lightcurve import LightCurveData
 
 
+@dataclass
+class SpectralLagResult:
+    """Container for spectral lag analysis results.
+
+    Attributes
+    ----------
+    lag : float
+        Best-fit spectral lag in seconds (peak of asymmetric Gaussian
+        fitted to the observed DCCF).
+    lag_err : float
+        1-sigma uncertainty on the lag, derived from the standard deviation
+        of the Monte Carlo lag distribution.
+    offsets : np.ndarray
+        Time offset array for the DCCF (seconds).
+    ccf : np.ndarray
+        Observed discrete cross-correlation function values.
+    ccf_err : np.ndarray
+        1-sigma CCF uncertainties from Monte Carlo noise simulations.
+    fit_params : Dict
+        Asymmetric Gaussian fit parameters:
+        ``{'const', 'amplitude', 'mu', 'sigma1', 'sigma2'}``.
+    n_simulations : Dict
+        Number of Monte Carlo simulations used:
+        ``{'ccf_error': int, 'lag_error': int}``.
+    """
+    lag: float
+    lag_err: float
+    offsets: np.ndarray
+    ccf: np.ndarray
+    ccf_err: np.ndarray
+    fit_params: Dict = field(default_factory=dict)
+    n_simulations: Dict = field(default_factory=dict)
+
+
 class TemporalAnalyzer:
-    """Analyzer for temporal properties of GRB light curves."""
+    """Analyzer for temporal properties of GRB light curves.
+
+    Provides standard timing metrics (T90, T50, peak flux, variability,
+    autocorrelation, FRED pulse fitting) and the Band (1997) discrete
+    cross-correlation function for spectral lag measurement.
+    """
 
     def __init__(self, config: Dict = None):
         """
@@ -21,6 +74,10 @@ class TemporalAnalyzer:
             Configuration dictionary
         """
         self.config = config or {}
+
+    # ------------------------------------------------------------------
+    # Duration and basic timing
+    # ------------------------------------------------------------------
 
     def calculate_t90(
         self,
@@ -138,6 +195,10 @@ class TemporalAnalyzer:
 
         return duration, duration_err, t_start, t_end
 
+    # ------------------------------------------------------------------
+    # Peak flux and variability
+    # ------------------------------------------------------------------
+
     def peak_flux(
         self,
         lc: LightCurveData,
@@ -222,6 +283,10 @@ class TemporalAnalyzer:
 
         return frms
 
+    # ------------------------------------------------------------------
+    # Autocorrelation and variability timescale
+    # ------------------------------------------------------------------
+
     def autocorrelation(
         self,
         lc: LightCurveData,
@@ -284,6 +349,10 @@ class TemporalAnalyzer:
             min_timescale = lags[-1]
 
         return min_timescale
+
+    # ------------------------------------------------------------------
+    # Pulse fitting
+    # ------------------------------------------------------------------
 
     def fit_fred_pulse(
         self,
@@ -434,6 +503,10 @@ class TemporalAnalyzer:
 
         return pulses
 
+    # ------------------------------------------------------------------
+    # Hardness ratio and simple spectral lag
+    # ------------------------------------------------------------------
+
     def hardness_ratio(
         self,
         lc_hard: LightCurveData,
@@ -500,13 +573,17 @@ class TemporalAnalyzer:
 
         return hr, hr_err
 
-    def spectral_lag(
+    def spectral_lag_simple(
         self,
         lc_high: LightCurveData,
         lc_low: LightCurveData,
     ) -> Tuple[float, float]:
         """
-        Calculate spectral lag (cross-correlation lag between energy bands).
+        Calculate spectral lag via scipy cross-correlation (simple method).
+
+        This is a quick estimate using scipy.signal.correlate.  For a proper
+        Band (1997) DCCF analysis with Monte Carlo errors, use
+        ``compute_spectral_lag`` instead.
 
         Parameters
         ----------
@@ -555,3 +632,379 @@ class TemporalAnalyzer:
             lag_err = lc_high.binsize
 
         return lag, lag_err
+
+    # ==================================================================
+    # Band (1997) Discrete Cross-Correlation Function (DCCF) and
+    # Monte Carlo spectral lag estimation
+    # ==================================================================
+
+    def discrete_cross_correlation(
+        self,
+        x: np.ndarray,
+        y: np.ndarray,
+        t: np.ndarray,
+    ) -> Tuple[np.ndarray, np.ndarray]:
+        """
+        Band (1997) Discrete Cross-Correlation Function for transient sources.
+
+        Computes the un-binned DCCF between two background-subtracted light
+        curves sampled on the same uniform time grid.  The normalisation
+        follows Band (1997) Eq. 1:
+
+            CCF(k) = sum_i x(i) * y(i+k) / sqrt( sum x^2 * sum y^2 )
+
+        where the summation indices are adjusted for each lag *k* so that
+        only overlapping samples contribute.
+
+        Parameters
+        ----------
+        x : np.ndarray
+            Background-subtracted count-rate array for the first energy band.
+        y : np.ndarray
+            Background-subtracted count-rate array for the second energy band.
+            Must have the same length and time-step as *x*.
+        t : np.ndarray
+            Uniform time array corresponding to both light curves.
+
+        Returns
+        -------
+        offsets : np.ndarray
+            Lag values in the same time units as *t*, from ``-N*dt`` to
+            ``+N*dt`` inclusive.
+        ccf : np.ndarray
+            Normalised cross-correlation values at each offset.
+
+        Notes
+        -----
+        Both *x* and *y* must already be background-subtracted before calling
+        this method.  The time array *t* must be uniformly spaced.
+        """
+        tstep = t[1] - t[0]
+        N = len(t)
+        lag_k = np.arange(-N, N + 1, 1)
+        offsets = lag_k * tstep
+
+        denominator = np.sqrt(
+            np.sum(np.square(x)) * np.sum(np.square(y))
+        )
+
+        if denominator == 0.0:
+            return offsets, np.zeros_like(offsets, dtype=float)
+
+        ccf = np.empty(len(lag_k), dtype=float)
+        for idx, k in enumerate(range(-N, N + 1)):
+            # Summation bounds (1-based in Band's notation, 0-based here)
+            i_start = max(0, -k)
+            i_end = min(N, N - k)
+            if i_start >= i_end:
+                ccf[idx] = 0.0
+            else:
+                ccf[idx] = np.sum(
+                    x[i_start:i_end] * y[i_start + k:i_end + k]
+                ) / denominator
+
+        return offsets, ccf
+
+    @staticmethod
+    def asymmetric_gaussian(
+        x: np.ndarray,
+        const: float,
+        amplitude: float,
+        mu: float,
+        sigma1: float,
+        sigma2: float,
+    ) -> np.ndarray:
+        """
+        Asymmetric (split-normal) Gaussian used to fit the DCCF peak.
+
+        .. math::
+
+            f(x) = \\begin{cases}
+                C + A \\exp\\!\\bigl(-\\tfrac{(x-\\mu)^2}{2\\sigma_1^2}\\bigr)
+                    & x < \\mu \\\\
+                C + A \\exp\\!\\bigl(-\\tfrac{(x-\\mu)^2}{2\\sigma_2^2}\\bigr)
+                    & x \\ge \\mu
+            \\end{cases}
+
+        Parameters
+        ----------
+        x : array_like
+            Independent variable (lag offsets).
+        const : float
+            Constant baseline offset.
+        amplitude : float
+            Peak amplitude above the baseline.
+        mu : float
+            Location of the peak (the spectral lag).
+        sigma1 : float
+            Width parameter for the left (x < mu) side.
+        sigma2 : float
+            Width parameter for the right (x >= mu) side.
+
+        Returns
+        -------
+        np.ndarray
+            Model values evaluated at each element of *x*.
+        """
+        x = np.asarray(x, dtype=float)
+        result = np.empty_like(x)
+        left = x < mu
+        right = ~left
+        result[left] = const + amplitude * np.exp(
+            -((x[left] - mu) / sigma1) ** 2 / 2.0
+        )
+        result[right] = const + amplitude * np.exp(
+            -((x[right] - mu) / sigma2) ** 2 / 2.0
+        )
+        return result
+
+    def compute_spectral_lag(
+        self,
+        lc_low: LightCurveData,
+        lc_high: LightCurveData,
+        tstart: float,
+        tstop: float,
+        n_ccf_sims: int = 10000,
+        n_lag_sims: int = 1000,
+        data_type: str = 'swift',
+    ) -> SpectralLagResult:
+        """
+        Full Band (1997) DCCF spectral-lag pipeline with Monte Carlo errors.
+
+        The procedure has three stages:
+
+        1. **Observed DCCF** -- Trim both light curves to ``[tstart, tstop]``,
+           subtract backgrounds (mean of the rate), and compute the discrete
+           cross-correlation function.
+
+        2. **CCF error estimation** (``n_ccf_sims`` iterations, default 10 000)
+           -- For each realisation, add random noise to the background-subtracted
+           light curves, recompute the DCCF, and record it.  The standard
+           deviation across realisations gives the 1-sigma CCF uncertainty at
+           each lag bin.  Noise model depends on ``data_type``:
+
+           * ``'fermi'`` -- Poisson noise: ``sqrt(|rate|)`` fluctuations.
+           * ``'swift'``  -- Gaussian noise drawn from the observed rate errors.
+
+        3. **Lag error estimation** (``n_lag_sims`` iterations, default 1 000)
+           -- For each realisation, draw a randomised CCF from within the CCF
+           errors (Gaussian scatter), fit an asymmetric Gaussian, and record
+           the peak location.  The standard deviation of the resulting lag
+           distribution is the 1-sigma lag uncertainty.
+
+        Parameters
+        ----------
+        lc_low : LightCurveData
+            Low-energy band light curve.
+        lc_high : LightCurveData
+            High-energy band light curve.
+        tstart : float
+            Start time of the analysis window (seconds, same reference frame
+            as ``LightCurveData.time``).
+        tstop : float
+            End time of the analysis window.
+        n_ccf_sims : int, optional
+            Number of Monte Carlo realisations for CCF error estimation
+            (default: 10 000).
+        n_lag_sims : int, optional
+            Number of Monte Carlo realisations for lag error estimation
+            (default: 1 000).
+        data_type : str, optional
+            Noise model selector: ``'fermi'`` for Poisson or ``'swift'`` for
+            Gaussian (default: ``'swift'``).
+
+        Returns
+        -------
+        SpectralLagResult
+            Dataclass with ``lag``, ``lag_err``, ``offsets``, ``ccf``,
+            ``ccf_err``, ``fit_params``, and ``n_simulations``.
+
+        Raises
+        ------
+        ValueError
+            If fewer than 4 bins overlap after trimming, or if both light
+            curves have zero variance (making the DCCF undefined).
+        """
+
+        # ---------------------------------------------------------------
+        # 0. Trim both light curves to [tstart, tstop]
+        # ---------------------------------------------------------------
+        mask_low = (lc_low.time >= tstart) & (lc_low.time <= tstop)
+        mask_high = (lc_high.time >= tstart) & (lc_high.time <= tstop)
+
+        t_low = lc_low.time[mask_low]
+        rate_low = lc_low.rate[mask_low]
+        err_low = lc_low.rate_err[mask_low]
+
+        t_high = lc_high.time[mask_high]
+        rate_high = lc_high.rate[mask_high]
+        err_high = lc_high.rate_err[mask_high]
+
+        # Interpolate to common uniform time grid (use the finer sampling)
+        dt = min(lc_low.binsize, lc_high.binsize)
+        t_common_start = max(t_low[0], t_high[0])
+        t_common_stop = min(t_low[-1], t_high[-1])
+        t_common = np.arange(t_common_start, t_common_stop + dt / 2.0, dt)
+
+        if len(t_common) < 4:
+            raise ValueError(
+                "Fewer than 4 overlapping bins after trimming to "
+                f"[{tstart}, {tstop}].  Cannot compute DCCF."
+            )
+
+        interp_low = interp1d(
+            t_low, rate_low, kind='linear',
+            bounds_error=False, fill_value=0.0,
+        )
+        interp_high = interp1d(
+            t_high, rate_high, kind='linear',
+            bounds_error=False, fill_value=0.0,
+        )
+        interp_err_low = interp1d(
+            t_low, err_low, kind='linear',
+            bounds_error=False, fill_value=0.0,
+        )
+        interp_err_high = interp1d(
+            t_high, err_high, kind='linear',
+            bounds_error=False, fill_value=0.0,
+        )
+
+        rate_low_c = interp_low(t_common)
+        rate_high_c = interp_high(t_common)
+        err_low_c = interp_err_low(t_common)
+        err_high_c = interp_err_high(t_common)
+
+        # Background subtraction (mean rate as background estimate)
+        bg_low = np.mean(rate_low_c)
+        bg_high = np.mean(rate_high_c)
+        x_bs = rate_low_c - bg_low
+        y_bs = rate_high_c - bg_high
+
+        # ---------------------------------------------------------------
+        # 1. Observed DCCF
+        # ---------------------------------------------------------------
+        offsets, ccf_observed = self.discrete_cross_correlation(
+            x_bs, y_bs, t_common
+        )
+
+        # ---------------------------------------------------------------
+        # 2. Monte Carlo CCF error estimation
+        # ---------------------------------------------------------------
+        ccf_ensemble = np.empty((n_ccf_sims, len(offsets)), dtype=float)
+
+        for i in range(n_ccf_sims):
+            if data_type == 'fermi':
+                # Poisson noise: fluctuation ~ sqrt(|rate|)
+                noise_low = np.random.normal(
+                    0.0, np.sqrt(np.abs(rate_low_c))
+                )
+                noise_high = np.random.normal(
+                    0.0, np.sqrt(np.abs(rate_high_c))
+                )
+            else:
+                # Gaussian noise from observed errors (Swift-like)
+                noise_low = np.random.normal(0.0, np.abs(err_low_c))
+                noise_high = np.random.normal(0.0, np.abs(err_high_c))
+
+            x_noisy = x_bs + noise_low
+            y_noisy = y_bs + noise_high
+
+            _, ccf_i = self.discrete_cross_correlation(
+                x_noisy, y_noisy, t_common
+            )
+            ccf_ensemble[i, :] = ccf_i
+
+        ccf_err = np.std(ccf_ensemble, axis=0)
+
+        # ---------------------------------------------------------------
+        # 3. Fit asymmetric Gaussian to observed CCF and get the lag
+        # ---------------------------------------------------------------
+        # Initial parameter guesses from the observed CCF
+        peak_idx = np.argmax(ccf_observed)
+        mu_guess = offsets[peak_idx]
+        amp_guess = ccf_observed[peak_idx]
+        sigma_guess = (offsets[-1] - offsets[0]) / 10.0
+
+        p0 = [0.0, amp_guess, mu_guess, abs(sigma_guess), abs(sigma_guess)]
+
+        # Reasonable bounds
+        offset_range = offsets[-1] - offsets[0]
+        bounds_lower = [-1.0, 0.0, offsets[0], 1e-6, 1e-6]
+        bounds_upper = [1.0, 2.0, offsets[-1], offset_range, offset_range]
+
+        try:
+            popt_obs, _ = curve_fit(
+                self.asymmetric_gaussian,
+                offsets, ccf_observed,
+                p0=p0,
+                bounds=(bounds_lower, bounds_upper),
+                maxfev=20000,
+            )
+        except Exception:
+            # If the full CCF is hard to fit, restrict to central region
+            center_mask = (
+                (offsets >= mu_guess - offset_range / 4.0) &
+                (offsets <= mu_guess + offset_range / 4.0)
+            )
+            popt_obs, _ = curve_fit(
+                self.asymmetric_gaussian,
+                offsets[center_mask], ccf_observed[center_mask],
+                p0=p0,
+                maxfev=20000,
+            )
+
+        lag_observed = popt_obs[2]  # mu is the lag
+
+        fit_params = {
+            'const': popt_obs[0],
+            'amplitude': popt_obs[1],
+            'mu': popt_obs[2],
+            'sigma1': popt_obs[3],
+            'sigma2': popt_obs[4],
+        }
+
+        # ---------------------------------------------------------------
+        # 4. Monte Carlo lag error estimation
+        # ---------------------------------------------------------------
+        lag_distribution = []
+
+        for _ in range(n_lag_sims):
+            # Randomise CCF within its errors
+            ccf_randomised = ccf_observed + np.random.normal(
+                0.0, np.where(ccf_err > 0, ccf_err, 1e-10)
+            )
+
+            try:
+                popt_mc, _ = curve_fit(
+                    self.asymmetric_gaussian,
+                    offsets, ccf_randomised,
+                    p0=popt_obs,
+                    bounds=(bounds_lower, bounds_upper),
+                    maxfev=20000,
+                )
+                lag_distribution.append(popt_mc[2])
+            except Exception:
+                # Skip failed fits
+                continue
+
+        if len(lag_distribution) > 0:
+            lag_err = float(np.std(lag_distribution))
+        else:
+            warnings.warn(
+                "All Monte Carlo lag fits failed; lag_err set to NaN.",
+                RuntimeWarning,
+            )
+            lag_err = float('nan')
+
+        # ---------------------------------------------------------------
+        # 5. Assemble result
+        # ---------------------------------------------------------------
+        return SpectralLagResult(
+            lag=float(lag_observed),
+            lag_err=lag_err,
+            offsets=offsets,
+            ccf=ccf_observed,
+            ccf_err=ccf_err,
+            fit_params=fit_params,
+            n_simulations={'ccf_error': n_ccf_sims, 'lag_error': n_lag_sims},
+        )
